@@ -8,21 +8,32 @@ import unicodedata
 from pathlib import Path
 
 import folium
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import pandas as pd
-import seaborn as sns
 import streamlit as st
 from folium.plugins import HeatMap, MarkerCluster
-from matplotlib.ticker import FuncFormatter
 from streamlit_folium import st_folium
+
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from matplotlib.ticker import FuncFormatter
+
+    STATS_IMPORT_ERROR = None
+except ModuleNotFoundError as exc:
+    matplotlib = None
+    plt = None
+    sns = None
+    FuncFormatter = None
+    STATS_IMPORT_ERROR = exc
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "dataset_tarea_ind.xlsx"
 GEOJSON_FILE = BASE_DIR / "comunas_metropolitana-1.geojson"
+REQUIRED_FILES = [DATA_FILE, GEOJSON_FILE]
 
 
 st.set_page_config(
@@ -96,6 +107,52 @@ def money_axis(value: float, _: object) -> str:
     if abs(value) >= 1_000_000:
         return f"${value / 1_000_000:.0f}M"
     return f"${value:,.0f}".replace(",", ".")
+
+
+def render_environment_error() -> bool:
+    if STATS_IMPORT_ERROR is None:
+        return False
+
+    st.error("Faltan dependencias estadísticas para ejecutar el dashboard.")
+    st.markdown(
+        """
+        Streamlit Cloud no instaló `matplotlib`/`seaborn`. Este dashboard las usa para los
+        gráficos estadísticos requeridos por la tarea, mientras que Folium se usa para los mapas.
+
+        Verifica que `requirements.txt` esté en la raíz del repositorio y que tenga:
+        """
+    )
+    st.code(
+        """pandas==2.3.3
+openpyxl==3.1.5
+streamlit==1.50.0
+folium==0.20.0
+streamlit-folium==0.25.3
+matplotlib==3.9.4
+seaborn==0.13.2""",
+        language="txt",
+    )
+    st.markdown(
+        """
+        Luego en Streamlit Cloud usa **Manage app -> Clear cache -> Reboot app**.
+        Si los logs muestran Python 3.14, verifica que `runtime.txt` esté en la raíz con `python-3.11`.
+        """
+    )
+    st.exception(STATS_IMPORT_ERROR)
+    return True
+
+
+def render_missing_files_error() -> bool:
+    missing = [path.name for path in REQUIRED_FILES if not path.exists()]
+    if not missing:
+        return False
+
+    st.error("Faltan archivos de datos requeridos por el dashboard.")
+    st.write("Archivos faltantes:", ", ".join(missing))
+    st.markdown(
+        "Sube estos archivos junto a `dashboard_individual.py` en la raíz del repositorio."
+    )
+    return True
 
 
 def commune_summary(df: pd.DataFrame) -> pd.DataFrame:
@@ -510,12 +567,15 @@ def render_findings(df: pd.DataFrame) -> None:
 
 
 def main() -> None:
+    st.title("Análisis geoespacial de ventas")
+    st.caption("Cadena de tiendas de comestibles | Región Metropolitana")
+
+    if render_environment_error() or render_missing_files_error():
+        return
+
     df = load_data()
     geojson = load_geojson()
     filtered = apply_filters(df)
-
-    st.title("Análisis geoespacial de ventas")
-    st.caption("Cadena de tiendas de comestibles | Región Metropolitana")
 
     if filtered.empty:
         st.warning("No hay registros para la combinacion de filtros seleccionada.")
@@ -532,10 +592,10 @@ def main() -> None:
         st.subheader("Panorama general")
         chart_cols = st.columns(2)
         with chart_cols[0]:
-            st.pyplot(sales_by_channel_chart(filtered), width="stretch")
+            st.pyplot(sales_by_channel_chart(filtered), use_container_width=True)
         with chart_cols[1]:
-            st.pyplot(monthly_sales_chart(filtered), width="stretch")
-        st.pyplot(top_communes_chart(filtered), width="stretch")
+            st.pyplot(monthly_sales_chart(filtered), use_container_width=True)
+        st.pyplot(top_communes_chart(filtered), use_container_width=True)
 
     with right:
         st.subheader("Mapa interactivo")
@@ -585,7 +645,7 @@ def main() -> None:
     lower_left, lower_right = st.columns((1, 1))
     with lower_left:
         st.subheader("Sintesis territorial")
-        st.pyplot(synthesis_chart(filtered), width="stretch")
+        st.pyplot(synthesis_chart(filtered), use_container_width=True)
     with lower_right:
         st.subheader("Hallazgos")
         render_findings(filtered)
@@ -609,9 +669,13 @@ def main() -> None:
                 ]
             ],
             hide_index=True,
-            width="stretch",
+            use_container_width=True,
         )
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        st.error("El dashboard encontró un error no esperado.")
+        st.exception(exc)
