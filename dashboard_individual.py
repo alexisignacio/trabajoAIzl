@@ -7,11 +7,16 @@ import math
 import unicodedata
 from pathlib import Path
 
-import altair as alt
 import folium
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import pandas as pd
+import seaborn as sns
 import streamlit as st
 from folium.plugins import HeatMap, MarkerCluster
+from matplotlib.ticker import FuncFormatter
 from streamlit_folium import st_folium
 
 
@@ -83,6 +88,14 @@ def compact_money(value: float) -> str:
     if abs(value) >= 1_000_000:
         return f"${value / 1_000_000:.1f} MM".replace(".", ",")
     return money(value)
+
+
+def money_axis(value: float, _: object) -> str:
+    if abs(value) >= 1_000_000_000:
+        return f"${value / 1_000_000_000:.1f}B"
+    if abs(value) >= 1_000_000:
+        return f"${value / 1_000_000:.0f}M"
+    return f"${value:,.0f}".replace(",", ".")
 
 
 def commune_summary(df: pd.DataFrame) -> pd.DataFrame:
@@ -345,94 +358,91 @@ def choropleth_map(df: pd.DataFrame, geojson: dict, metric_column: str) -> foliu
     return add_layer_control(mapa)
 
 
-def sales_by_channel_chart(df: pd.DataFrame) -> alt.Chart:
+def sales_by_channel_chart(df: pd.DataFrame) -> plt.Figure:
     data = (
         df.groupby("canal", as_index=False)
         .agg(venta_neta=("venta_neta", "sum"), ordenes=("orden", "count"))
         .sort_values("venta_neta", ascending=False)
     )
-    return (
-        alt.Chart(data)
-        .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
-        .encode(
-            x=alt.X("canal:N", title="Canal"),
-            y=alt.Y("venta_neta:Q", title="Venta neta"),
-            color=alt.Color("canal:N", legend=None, scale=alt.Scale(scheme="tableau10")),
-            tooltip=[
-                alt.Tooltip("canal:N", title="Canal"),
-                alt.Tooltip("venta_neta:Q", title="Venta", format=",.0f"),
-                alt.Tooltip("ordenes:Q", title="Ordenes", format=",.0f"),
-            ],
-        )
-        .properties(height=260)
-    )
+    fig, ax = plt.subplots(figsize=(5.8, 3.4))
+    sns.barplot(data=data, x="canal", y="venta_neta", hue="canal", legend=False, ax=ax)
+    ax.set_title("Venta neta por canal", fontsize=12, weight="bold")
+    ax.set_xlabel("Canal")
+    ax.set_ylabel("Venta neta")
+    ax.yaxis.set_major_formatter(FuncFormatter(money_axis))
+    ax.grid(axis="y", alpha=0.25)
+    for container in ax.containers:
+        labels = [compact_money(value) for value in container.datavalues]
+        ax.bar_label(container, labels=labels, fontsize=8, padding=3)
+    fig.tight_layout()
+    return fig
 
 
-def monthly_sales_chart(df: pd.DataFrame) -> alt.Chart:
+def monthly_sales_chart(df: pd.DataFrame) -> plt.Figure:
     data = (
         df.groupby("mes", as_index=False)
         .agg(venta_neta=("venta_neta", "sum"), ordenes=("orden", "count"))
         .sort_values("mes")
     )
-    return (
-        alt.Chart(data)
-        .mark_line(point=True, strokeWidth=3, color="#2a9d8f")
-        .encode(
-            x=alt.X("mes:N", title="Mes"),
-            y=alt.Y("venta_neta:Q", title="Venta neta"),
-            tooltip=[
-                alt.Tooltip("mes:N", title="Mes"),
-                alt.Tooltip("venta_neta:Q", title="Venta", format=",.0f"),
-                alt.Tooltip("ordenes:Q", title="Ordenes", format=",.0f"),
-            ],
-        )
-        .properties(height=260)
-    )
+    fig, ax = plt.subplots(figsize=(5.8, 3.4))
+    ax.plot(data["mes"], data["venta_neta"], marker="o", linewidth=2.4, color="#2a9d8f")
+    ax.set_title("Evolucion mensual de ventas", fontsize=12, weight="bold")
+    ax.set_xlabel("Mes")
+    ax.set_ylabel("Venta neta")
+    ax.yaxis.set_major_formatter(FuncFormatter(money_axis))
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    return fig
 
 
-def top_communes_chart(df: pd.DataFrame) -> alt.Chart:
+def top_communes_chart(df: pd.DataFrame) -> plt.Figure:
     data = commune_summary(df).head(12)
-    return (
-        alt.Chart(data)
-        .mark_bar(cornerRadiusTopRight=3, cornerRadiusBottomRight=3, color="#e76f51")
-        .encode(
-            y=alt.Y("comuna:N", sort="-x", title="Comuna"),
-            x=alt.X("venta_neta:Q", title="Venta neta"),
-            tooltip=[
-                alt.Tooltip("comuna:N", title="Comuna"),
-                alt.Tooltip("venta_neta:Q", title="Venta", format=",.0f"),
-                alt.Tooltip("ordenes:Q", title="Ordenes", format=",.0f"),
-                alt.Tooltip("ticket_promedio:Q", title="Ticket", format=",.0f"),
-            ],
-        )
-        .properties(height=360)
-    )
+    fig, ax = plt.subplots(figsize=(8.2, 5.2))
+    sns.barplot(data=data, y="comuna", x="venta_neta", color="#e76f51", ax=ax)
+    ax.set_title("Top 12 comunas por venta neta", fontsize=12, weight="bold")
+    ax.set_xlabel("Venta neta")
+    ax.set_ylabel("Comuna")
+    ax.xaxis.set_major_formatter(FuncFormatter(money_axis))
+    ax.grid(axis="x", alpha=0.25)
+    fig.tight_layout()
+    return fig
 
 
-def synthesis_chart(df: pd.DataFrame) -> alt.Chart:
+def synthesis_chart(df: pd.DataFrame) -> plt.Figure:
     data = commune_summary(df)
-    return (
-        alt.Chart(data)
-        .mark_circle(opacity=0.75, stroke="#ffffff", strokeWidth=0.8)
-        .encode(
-            x=alt.X("ordenes:Q", title="Ordenes"),
-            y=alt.Y("ticket_promedio:Q", title="Ticket promedio"),
-            size=alt.Size("venta_neta:Q", title="Venta neta", scale=alt.Scale(range=[80, 1800])),
-            color=alt.Color(
-                "kms_promedio:Q",
-                title="Km promedio",
-                scale=alt.Scale(scheme="viridis"),
-            ),
-            tooltip=[
-                alt.Tooltip("comuna:N", title="Comuna"),
-                alt.Tooltip("venta_neta:Q", title="Venta", format=",.0f"),
-                alt.Tooltip("ordenes:Q", title="Ordenes", format=",.0f"),
-                alt.Tooltip("ticket_promedio:Q", title="Ticket", format=",.0f"),
-                alt.Tooltip("kms_promedio:Q", title="Km", format=".1f"),
-            ],
-        )
-        .properties(height=360)
+    sale_range = data["venta_neta"].max() - data["venta_neta"].min()
+    if sale_range == 0:
+        sizes = [420] * len(data)
+    else:
+        sizes = 90 + 1250 * (data["venta_neta"] - data["venta_neta"].min()) / sale_range
+
+    fig, ax = plt.subplots(figsize=(7.6, 5.2))
+    scatter = ax.scatter(
+        data["ordenes"],
+        data["ticket_promedio"],
+        s=sizes,
+        c=data["kms_promedio"],
+        cmap="viridis",
+        alpha=0.75,
+        edgecolors="white",
+        linewidths=0.8,
     )
+    for _, row in data.head(6).iterrows():
+        ax.annotate(
+            row["comuna"],
+            (row["ordenes"], row["ticket_promedio"]),
+            xytext=(5, 3),
+            textcoords="offset points",
+            fontsize=8,
+        )
+    ax.set_title("Sintesis territorial por comuna", fontsize=12, weight="bold")
+    ax.set_xlabel("Ordenes")
+    ax.set_ylabel("Ticket promedio")
+    ax.yaxis.set_major_formatter(FuncFormatter(money_axis))
+    ax.grid(alpha=0.25)
+    fig.colorbar(scatter, ax=ax, label="Km promedio")
+    fig.tight_layout()
+    return fig
 
 
 def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
@@ -522,10 +532,10 @@ def main() -> None:
         st.subheader("Panorama general")
         chart_cols = st.columns(2)
         with chart_cols[0]:
-            st.altair_chart(sales_by_channel_chart(filtered), use_container_width=True)
+            st.pyplot(sales_by_channel_chart(filtered), width="stretch")
         with chart_cols[1]:
-            st.altair_chart(monthly_sales_chart(filtered), use_container_width=True)
-        st.altair_chart(top_communes_chart(filtered), use_container_width=True)
+            st.pyplot(monthly_sales_chart(filtered), width="stretch")
+        st.pyplot(top_communes_chart(filtered), width="stretch")
 
     with right:
         st.subheader("Mapa interactivo")
@@ -575,7 +585,7 @@ def main() -> None:
     lower_left, lower_right = st.columns((1, 1))
     with lower_left:
         st.subheader("Sintesis territorial")
-        st.altair_chart(synthesis_chart(filtered), use_container_width=True)
+        st.pyplot(synthesis_chart(filtered), width="stretch")
     with lower_right:
         st.subheader("Hallazgos")
         render_findings(filtered)
